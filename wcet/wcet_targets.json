@@ -1,5 +1,10 @@
 {
     "schema_version": 1,
+    "elf": "../build/Debug/profiler_demo.elf",
+    "output_csv": "wcet.csv",
+    "instrumentation": {
+        "include_profiler_hooks": false
+    },
     "timing": {
         "cpu_clock_hz": 16000000,
         "model": "m0plus"

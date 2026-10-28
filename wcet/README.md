@@ -3,8 +3,10 @@
 Generate static WCET estimates and compare them with measured execution cycles.
 Settings and justified flow facts are stored in `wcet\wcet_targets.json`.
 
-> **Configuration warning:** The checked-in checksum and flow-fact offsets predate
-> the latest profiler sync. Refresh them before relying on the WCET results.
+The default configuration analyzes the eight `bench_*` functions in
+`build\Debug\profiler_demo.elf` using the Cortex-M0+ timing model at 16 MHz.
+The runner discovers loop offsets from the input ELF and applies the configured bounds;
+there are no checked-in ELF-specific loop offsets or checksum.
 
 The project [WCET Tool Validation report](../../../bb/hr/fusa/docs/reference/markdown/wcet_tool_validation.md)
 assesses these benchmark records as validation inputs. Historical comparisons
@@ -12,7 +14,7 @@ do not automatically validate the application Cortex-M33 timing model.
 
 ## Usage
 
-Run commands from the project root and replace `<project>` with the firmware name.
+Run commands from the project root.
 Requires WSL, the configured OTAWA environment, and a sibling `sewcet` checkout
 (or its location in `SEWCET_DIR`). Comparison-only currently also initializes
 that environment, but does not regenerate WCET or require an ELF input.
@@ -20,7 +22,7 @@ that environment, but does not regenerate WCET or require an ELF input.
 Generate a WCET CSV:
 
 ```powershell
-.\wcet\run_wcet.ps1 -e ".\build\Debug\<project>.elf" -o .\wcet\wcet.csv
+.\wcet\run_wcet.ps1 -e .\build\Debug\profiler_demo.elf
 ```
 
 Compare an existing measurement CSV against an existing WCET CSV:
@@ -46,6 +48,18 @@ the WCET output; the comparison filename is generated automatically.
 
 ## Results and validity
 
+The default output is `wcet\wcet.csv`, not the historical `1w.csv`/`2w.csv`.
+A successful PowerShell generation also writes `wcet.csv.analysis.json` containing
+ELF, configuration, and CSV SHA-256 hashes, timing model, clock, hook policy, and
+function count. Keep the two files together; rerun after rebuilding the firmware.
+Generated results and intermediate `work` files are Git-ignored.
+
+The configured input bounds are conditional: `bench_fixed_loop_sum(count)` assumes
+`count <= 25`, and `bench_crc8_fixed_block(data, length)` assumes `length <= 16`
+with eight bit iterations per byte. These are demo-call constraints, not bounds for
+arbitrary callers. Review the generated `.ff` files in `wcet\work` whenever code or
+loop structure changes; shorthand bounds follow discovered loop order.
+
 The WCET CSV contains one estimate per function: `calls` is 1 and
 `total_cycles`, `min_cycles`, `max_cycles`, and `avg_cycles` hold the estimate.
 Comparison matches function names and checks measured `max_cycles` against
@@ -66,6 +80,13 @@ Check `instrumentation.include_profiler_hooks` for hook accounting; interrupt
 preemption is not included in static WCET unless modeled through
 `interference_functions`. Timing-model details are documented in the `sewcet` README.
 
-After rebuilding, regenerate flow facts with OTAWA `mkff`, refresh `elf_checksum`
-and loop/indirect-call offsets, and re-check each bound against its `reason` in
-`wcet_targets.json`. Then rerun `run_wcet.ps1`.
+Profiler hooks are explicitly excluded from static analysis. This does not make
+the result directly equivalent to calibrated runtime telemetry: confirm build flags,
+probe compensation, memory wait states, and execution scope before comparison.
+Interrupt preemption is not modeled by the default configuration.
+The nominal 100/500/1000-cycle benchmark bodies include function/prologue costs in
+static analysis, so estimates need not equal their names.
+
+After rebuilding, rerun `run_wcet.ps1`, review its flow facts and logs, and retain the
+new analysis record. Do not interpret a successful run or an observed maximum below
+an estimate as proof of a valid WCET bound.

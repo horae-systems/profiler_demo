@@ -84,6 +84,39 @@ if ($Compare) {
 $configPath = if ($Config) { Resolve-CallerPath $Config } else { Join-Path $PSScriptRoot 'wcet_targets.json' }
 $wcetOnlyFlag = ($WcetOnly.IsPresent -or ([bool]$Elf -and ($resolvedCompare.Count -eq 0)))
 
+function Write-AnalysisRecord {
+    if (-not $Elf) { return }
+    $settings = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+    $csvPath = if ($Out) {
+        Resolve-CallerPath $Out
+    } else {
+        $relativeOutput = if ($settings.output_csv) { $settings.output_csv } else { '1w.csv' }
+        [System.IO.Path]::GetFullPath((Join-Path (Split-Path $configPath) $relativeOutput))
+    }
+    if (-not (Test-Path -LiteralPath $csvPath)) {
+        throw "WCET runner succeeded but output is missing: $csvPath"
+    }
+    $rows = @(Import-Csv -LiteralPath $csvPath)
+    if ($rows.Count -eq 0) { throw "WCET runner produced no function estimates: $csvPath" }
+    $clock = [long]$settings.timing.cpu_clock_hz
+    if ($clock -le 0) { throw 'WCET configuration must specify a positive cpu_clock_hz.' }
+    $record = [ordered]@{
+        schema_version = 1
+        analysis_kind = 'static_timing_estimate'
+        generated_at_utc = [DateTime]::UtcNow.ToString('o')
+        elf = Resolve-CallerPath $Elf
+        elf_sha256 = (Get-FileHash -LiteralPath $Elf -Algorithm SHA256).Hash.ToLowerInvariant()
+        config_sha256 = (Get-FileHash -LiteralPath $configPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        csv_sha256 = (Get-FileHash -LiteralPath $csvPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        cpu_clock_hz = $clock
+        model = if ($Model) { $Model } else { $settings.timing.model }
+        include_profiler_hooks = [bool]$settings.instrumentation.include_profiler_hooks
+        function_count = $rows.Count
+        limitations = 'Conditional timing estimates, not qualified WCET bounds. Review loop bounds, target memory timing, instrumentation and interrupt assumptions.'
+    }
+    $record | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath "$csvPath.analysis.json" -Encoding UTF8
+}
+
 $sewcet = if ($env:SEWCET_DIR) { $env:SEWCET_DIR } else { Join-Path $PSScriptRoot '..\..\sewcet' }
 $tool = Join-Path $sewcet 'wcet\run_wcet.ps1'
 if (-not (Test-Path -LiteralPath $tool)) {
@@ -103,7 +136,9 @@ if ($toolFull -and ($toolFull -ne $selfPath)) {
     if ($Model) { $toolArgs.Model = $Model }
     if ($resolvedCompare.Count -gt 0) { $toolArgs.Compare = $resolvedCompare }
     & $tool @toolArgs
-    exit $LASTEXITCODE
+    $status = $LASTEXITCODE
+    if ($status -eq 0) { Write-AnalysisRecord }
+    exit $status
 }
 
 function ConvertTo-WslPath([string]$Path) {
@@ -149,4 +184,6 @@ if ($Model) {
 }
 
 & wsl.exe @wslArgs
-exit $LASTEXITCODE
+$status = $LASTEXITCODE
+if ($status -eq 0) { Write-AnalysisRecord }
+exit $status
